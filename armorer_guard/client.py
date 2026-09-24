@@ -18,6 +18,8 @@ from decimal import Decimal
 from typing import Any
 
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024
+# Largest integer an IEEE 754 double represents exactly (Number.MAX_SAFE_INTEGER).
+MAX_SAFE_INTEGER = 2**53 - 1
 _API_PATH = re.compile(r"/v1/[A-Za-z0-9._~/-]+")
 
 
@@ -249,8 +251,19 @@ class GuardSidecar:
 def canonical_json(value: Any) -> str:
     if value is None or isinstance(value, (bool, str)):
         return json.dumps(value, ensure_ascii=False)
-    if isinstance(value, (int, float)):
+    if isinstance(value, int):
+        # Python ints are unbounded, JSON numbers are IEEE 754 doubles. Past
+        # 2**53-1 the conversion is lossy, so 2**53 and 2**53+1 would produce
+        # the same canonical form and therefore the same signature.
+        if not -MAX_SAFE_INTEGER <= value <= MAX_SAFE_INTEGER:
+            raise ValueError(
+                "canonical JSON rejects integers outside "
+                f"+/-{MAX_SAFE_INTEGER} because they cannot round-trip "
+                "through a JSON number"
+            )
         return _canonical_number(float(value))
+    if isinstance(value, float):
+        return _canonical_number(value)
     if isinstance(value, (list, tuple)):
         return "[" + ",".join(canonical_json(item) for item in value) + "]"
     if isinstance(value, dict):

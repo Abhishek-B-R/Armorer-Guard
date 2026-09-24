@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import armorer_guard
+import armorer_guard.client
 
 
 def test_canonical_values_are_stable() -> None:
@@ -20,11 +21,36 @@ def test_canonical_values_are_stable() -> None:
     )
 
 
-
 def test_canonical_json_matches_shared_fixture() -> None:
     fixture = Path(__file__).parent / "fixtures" / "canonical-json.json"
     for case in json.loads(fixture.read_text(encoding="utf-8")):
-        assert armorer_guard.canonical_json(case["value"]) == case["canonical"], case["name"]
+        assert armorer_guard.canonical_json(case["value"]) == case["canonical"], (
+            case["name"]
+        )
+
+
+def test_canonical_json_rejects_integers_past_the_safe_range() -> None:
+    safe = armorer_guard.client.MAX_SAFE_INTEGER
+    assert armorer_guard.canonical_json(safe) == "9007199254740991"
+    assert armorer_guard.canonical_json(-safe) == "-9007199254740991"
+
+    for unsafe in (safe + 1, safe + 2, -(safe + 1), 2**64, 10**30):
+        with pytest.raises(ValueError, match="outside"):
+            armorer_guard.canonical_json(unsafe)
+
+    # The pair that used to collide: both landed on 9007199254740992.0.
+    with pytest.raises(ValueError):
+        armorer_guard.canonical_digest({"nonce": 2**53})
+    with pytest.raises(ValueError):
+        armorer_guard.sign_canonical(bytes([7]) * 32, {"nonce": 2**53 + 1})
+
+
+def test_canonical_json_still_takes_bools_and_nested_safe_ints() -> None:
+    value = {"flag": True, "count": 9007199254740991, "ratio": 0.5}
+    assert armorer_guard.canonical_json(value) == (
+        '{"count":9007199254740991,"flag":true,"ratio":0.5}'
+    )
+
 
 def test_sidecar_routes_use_only_public_runtime_endpoints() -> None:
     sidecar = armorer_guard.GuardSidecar(socket_path="/tmp/guard-sdk-test.sock")
