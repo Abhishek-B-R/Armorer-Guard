@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +19,12 @@ def test_canonical_values_are_stable() -> None:
         "hmac-sha256:"
     )
 
+
+
+def test_canonical_json_matches_shared_fixture() -> None:
+    fixture = Path(__file__).parent / "fixtures" / "canonical-json.json"
+    for case in json.loads(fixture.read_text(encoding="utf-8")):
+        assert armorer_guard.canonical_json(case["value"]) == case["canonical"], case["name"]
 
 def test_sidecar_routes_use_only_public_runtime_endpoints() -> None:
     sidecar = armorer_guard.GuardSidecar(socket_path="/tmp/guard-sdk-test.sock")

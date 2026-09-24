@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import inspect
 import json
+import math
 import os
 import re
 import socket
@@ -13,6 +14,7 @@ import ssl
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024
@@ -245,13 +247,46 @@ class GuardSidecar:
 
 
 def canonical_json(value: Any) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
+    if value is None or isinstance(value, (bool, str)):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, (int, float)):
+        return _canonical_number(float(value))
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(canonical_json(item) for item in value) + "]"
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise TypeError("canonical JSON accepts only string object keys")
+        # Sort by UTF-16 code units to match ECMAScript and RFC 8785.
+        keys = sorted(value, key=lambda key: key.encode("utf-16-be", "surrogatepass"))
+        return "{" + ",".join(
+            json.dumps(key, ensure_ascii=False) + ":" + canonical_json(value[key])
+            for key in keys
+        ) + "}"
+    raise TypeError("canonical JSON accepts only JSON values")
+
+
+def _canonical_number(number: float) -> str:
+    """Format a number like ECMAScript Number.prototype.toString (RFC 8785)."""
+    if not math.isfinite(number):
+        raise ValueError("canonical JSON rejects non-finite numbers")
+    if number == 0:
+        return "0"
+    sign = "-" if number < 0 else ""
+    # repr gives the shortest round-trip digits, as ECMAScript does.
+    shortest = Decimal(repr(abs(number))).normalize().as_tuple()
+    digits = "".join(str(digit) for digit in shortest.digits)
+    point = len(digits) + shortest.exponent
+    if len(digits) <= point <= 21:
+        text = digits + "0" * (point - len(digits))
+    elif 0 < point <= 21:
+        text = digits[:point] + "." + digits[point:]
+    elif -6 < point <= 0:
+        text = "0." + "0" * -point + digits
+    else:
+        power = point - 1
+        text = digits[0] + ("." + digits[1:] if len(digits) > 1 else "")
+        text += "e" + ("+" if power >= 0 else "-") + str(abs(power))
+    return sign + text
 
 
 def canonical_digest(value: Any) -> str:
